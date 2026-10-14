@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "BTC/INR Future Candle Overlay",
+  "version": "0.1.0",
+  "description": "Read-only, click-through research forecast overlay for supported CoinDCX BTC/INR charts.",
+  "permissions": [],
+  "host_permissions": [
+    "https://coindcx.com/*",
+    "https://*.coindcx.com/*",
+    "http://127.0.0.1:8765/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://coindcx.com/trade/BTCINR*",
+        "https://www.coindcx.com/trade/BTCINR*"
+      ],
+      "js": ["content.js"],
+      "css": ["overlay.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "BTC/INR overlay status"
+  }
+}
