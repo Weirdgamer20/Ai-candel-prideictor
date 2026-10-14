@@ -3,7 +3,7 @@
   "name": "BTC/INR Future Candle Overlay",
   "version": "0.1.0",
   "description": "Read-only, click-through research forecast overlay for supported CoinDCX BTC/INR charts.",
-  "permissions": [],
+  "permissions": ["alarms", "tabs"],
   "host_permissions": [
     "https://coindcx.com/*",
     "https://*.coindcx.com/*",
