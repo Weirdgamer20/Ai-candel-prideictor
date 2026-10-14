@@ -1,10 +1,16 @@
-const TARGET = "https://coindcx.com/trade/BTCINR";
+const TARGETS = [
+  "https://coindcx.com/trade/BTCINR",
+  "https://www.coindcx.com/trade/BTCINR"
+];
 const API = "http://127.0.0.1:8765/api/v1/prediction";
-const POLL_MS = 5000;
 const lastByTab = new Map();
 
+function isSupportedUrl(url) {
+  return typeof url === "string" && TARGETS.some(prefix => url.startsWith(prefix));
+}
+
 async function pollTab(tab) {
-  if (!tab?.id || !tab.url || !tab.url.startsWith(TARGET)) return;
+  if (!tab?.id || !isSupportedUrl(tab.url)) return;
   try {
     const response = await fetch(API, { cache: "no-store" });
     if (!response.ok) throw new Error("Prediction service unavailable");
