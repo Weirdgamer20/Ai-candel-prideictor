@@ -22,7 +22,7 @@ def _bundle():
             "close": ConstantModel(0.002 * h),
         }
         intervals[str(h)] = {k: [-0.001, 0.001] for k in ("open", "high", "low", "close")}
-    return {"version": 1, "horizons": list(range(1, 16)), "models": models,
+    return {"version": 2, "horizons": list(range(1, 16)), "models": models,
             "residual_intervals": intervals}
 
 
