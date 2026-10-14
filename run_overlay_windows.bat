@@ -1,9 +1,16 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+set "PROJECT_ROOT=%CD%"
 if not exist ".venv\Scripts\python.exe" (
   echo Create the environment first: py -3.12 -m venv .venv
   echo Then run: .venv\Scripts\python.exe -m pip install -r requirements.txt
+  pause
+  exit /b 1
+)
+if not exist "data\raw\btc_inr_15m.csv" (
+  echo Historical data is missing. Run:
+  echo .venv\Scripts\python.exe download_data.py --pair auto --start-date 2018-10-18
   pause
   exit /b 1
 )
@@ -13,6 +20,6 @@ if "%BTCINR_EXTENSION_ID%"=="" (
   pause
   exit /b 1
 )
-start "BTC INR Data Updater" cmd /k "set BTCINR_EXTENSION_ID=%BTCINR_EXTENSION_ID%&& cd /d %CD% && .venv\Scripts\python.exe -m src.live_data_service"
-start "BTC INR Prediction API" cmd /k "set BTCINR_EXTENSION_ID=%BTCINR_EXTENSION_ID%&& cd /d %CD% && .venv\Scripts\python.exe -m uvicorn src.prediction_api:app --host 127.0.0.1 --port 8765"
-echo Started read-only local services. Multi-horizon model must be trained before forecasts are available.
+start "BTC INR Data Updater" powershell -NoExit -Command "$env:BTCINR_EXTENSION_ID='%BTCINR_EXTENSION_ID%'; Set-Location -LiteralPath '%PROJECT_ROOT%'; & '.\.venv\Scripts\python.exe' -m src.live_data_service"
+start "BTC INR Prediction API" powershell -NoExit -Command "$env:BTCINR_EXTENSION_ID='%BTCINR_EXTENSION_ID%'; Set-Location -LiteralPath '%PROJECT_ROOT%'; & '.\.venv\Scripts\python.exe' -m uvicorn src.prediction_api:app --host 127.0.0.1 --port 8765"
+echo Started read-only local services. Train models before expecting forecasts.
