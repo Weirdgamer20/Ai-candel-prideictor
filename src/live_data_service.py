@@ -1,7 +1,7 @@
 """Incremental CoinDCX candle updater for the local overlay.
 
-Run as a separate Windows process. It only downloads public market data and
-writes a local CSV; it cannot access balances or place orders.
+Refreshes a short overlap so the latest still-forming candle is replaced by the
+final exchange candle after close. This service only uses public market data.
 """
 from __future__ import annotations
 
@@ -23,15 +23,20 @@ def update_once() -> int:
             f"{DATA_PATH} does not exist. Run download_data.py first to obtain historical candles."
         )
     pair = os.getenv("BTCINR_PAIR") or discover_btc_inr_pair()
-    before = pd.read_csv(DATA_PATH, usecols=["time"])
-    previous = before["time"].max() if not before.empty else None
-    updated = fetch_candles(pair=pair, resume_path=str(DATA_PATH))
-    latest = updated["time"].max() if not updated.empty else None
-    if latest is not None and (previous is None or str(latest) != str(previous)):
-        temporary = DATA_PATH.with_suffix(".tmp.csv")
-        save_candles(updated, str(temporary))
-        temporary.replace(DATA_PATH)
-    return len(updated)
+    existing = pd.read_csv(DATA_PATH, parse_dates=["time"])
+    if existing.empty:
+        raise ValueError("Local candle CSV is empty")
+    existing["time"] = pd.to_datetime(existing["time"], errors="coerce", utc=True)
+    existing = existing.dropna(subset=["time"]).drop_duplicates("time").sort_values("time")
+    overlap_start = existing["time"].max() - pd.Timedelta(minutes=60)
+    refreshed = fetch_candles(pair=pair, start_date=overlap_start.isoformat())
+    combined = pd.concat([existing, refreshed], ignore_index=True)
+    combined["time"] = pd.to_datetime(combined["time"], errors="coerce", utc=True)
+    combined = combined.dropna(subset=["time"]).drop_duplicates("time", keep="last").sort_values("time")
+    temporary = DATA_PATH.with_suffix(".tmp.csv")
+    save_candles(combined, str(temporary))
+    temporary.replace(DATA_PATH)
+    return len(combined)
 
 
 def main() -> None:
