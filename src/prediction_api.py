@@ -12,7 +12,6 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from .data import discover_btc_inr_pair, fetch_candles, save_candles
 from .multihorizon import forecast_ohlc
 from .modeling import load_models, predict_next
 
@@ -53,19 +52,29 @@ def get_prediction():
         if not required.issubset(raw.columns) or raw.empty:
             raise ValueError("Candle CSV is empty or missing required OHLCV fields")
         raw["time"] = pd.to_datetime(raw["time"], errors="coerce", utc=True)
-        raw = raw.dropna(subset=["time"]).drop_duplicates("time").sort_values("time")
+        for column in ("open", "high", "low", "close", "volume"):
+            raw[column] = pd.to_numeric(raw[column], errors="coerce")
+        raw = raw.dropna(subset=list(required)).drop_duplicates("time").sort_values("time")
+        now = pd.Timestamp.now(tz="UTC")
+        # CoinDCX timestamps identify candle starts. Never infer a forecast from
+        # a still-forming candle; only use bars whose 15-minute interval is closed.
+        raw = raw.loc[raw["time"] + pd.Timedelta(minutes=15) <= now].copy()
+        if raw.empty:
+            raise HTTPException(status_code=503, detail="No completed 15-minute candles are available")
         latest_time = raw["time"].iloc[-1]
-        age_minutes = (pd.Timestamp.now(tz="UTC") - latest_time).total_seconds() / 60
-        if age_minutes < -15:
-            raise ValueError("Latest candle timestamp is in the future")
+        latest_close_time = latest_time + pd.Timedelta(minutes=15)
+        age_minutes = (now - latest_close_time).total_seconds() / 60
+        if age_minutes < 0:
+            raise ValueError("Completed-candle timestamp validation failed")
         if age_minutes > MAX_STALE_MINUTES:
-            raise HTTPException(status_code=503, detail=f"Market data is stale ({age_minutes:.1f} minutes old)")
+            raise HTTPException(status_code=503, detail=f"Market data is stale ({age_minutes:.1f} minutes since candle close)")
 
         result = {
             "symbol": "BTC/INR",
             "timeframe": "15m",
             "data_status": "FRESH",
             "data_age_minutes": round(age_minutes, 2),
+            "last_completed_candle": latest_time.isoformat(),
             "trading_enabled": False,
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -83,10 +92,7 @@ def get_prediction():
             result["forecast"] = None
             result["forecast_status"] = f"UNAVAILABLE: {exc}"
 
-        if result["forecast"] is None:
-            result["status"] = "NO_FORECAST"
-        else:
-            result["status"] = "RESEARCH_FORECAST"
+        result["status"] = "RESEARCH_FORECAST" if result["forecast"] is not None else "NO_FORECAST"
         return result
     except HTTPException:
         raise
