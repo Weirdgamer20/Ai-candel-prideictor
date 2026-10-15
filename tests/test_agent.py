@@ -28,10 +28,12 @@ def observations(now):
     return market, account
 
 
-def test_buy_decision_requires_real_observations_and_passes_gates():
+def test_buy_decision_passes_configured_gates():
     now = datetime.now(timezone.utc)
     market, account = observations(now)
-    result = evaluate_opportunity(market, account, now=now)
+    result = evaluate_opportunity(
+        market, account, AgentConfig(max_price_deviation_bps=300.0), now=now
+    )
     assert result.action is Action.BUY
     assert result.suggested_quote_amount == 500.0
     assert result.estimated_net_edge_bps is not None
