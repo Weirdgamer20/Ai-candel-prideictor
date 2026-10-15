@@ -1,26 +1,43 @@
 import json
+import re
 from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from src.data import data_quality_report, discover_btc_inr_pair, fetch_candles, save_candles
+from src.data import data_quality_report, fetch_candles, save_candles
 from src.modeling import fit_and_evaluate, load_models, predict_next
 from src.ocr_utils import extract_chart_data
+from src.universe import discover_spot_markets
 
-DATA_PATH = Path("data/raw/btc_inr_15m.csv")
-MODEL_DIR = Path("models")
 
 st.set_page_config(
-    page_title="BTC/INR ML Predictor",
+    page_title="AI Crypto Candle Predictor",
     page_icon="₿",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-st.title("BTC/INR ML Predictor")
-st.caption("CoinDCX 15-Minute Spot Candle Research · Next-Candle Forecasts · Evaluated Holdouts · OCR Verification")
+
+@st.cache_data(ttl=300)
+def cached_spot_markets(quote_filter: str):
+    return discover_spot_markets(None if quote_filter == "All quotes" else (quote_filter,))
+
+
+def safe_market_slug(asset: str, quote: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", f"{asset}_{quote}".lower()).strip("_")
+
+
+def infer_assets_from_pair(pair: str) -> tuple[str, str]:
+    pair_body = pair.split("-", 1)[-1]
+    parts = pair_body.split("_", 1)
+    if len(parts) == 2 and all(parts):
+        return parts[0].upper(), parts[1].upper()
+    return "UNKNOWN", "UNKNOWN"
+
+st.title("AI Crypto Candle Predictor")
+st.caption("CoinDCX spot-market research · Multi-asset candle forecasts · Risk-gated decision foundation · OCR verification")
 
 st.info(
     "**Boundary Notice**: Research & prediction tool only. Predictions are probabilistic model estimates and "
@@ -32,11 +49,36 @@ st.info(
 # ----------------- SIDEBAR -----------------
 with st.sidebar:
     st.header("⚙️ Market Data Engine")
-    pair_input = st.text_input(
-        "Market Pair",
-        value="auto",
-        help="Use 'auto' to resolve active BTC/INR spot market (e.g. I-BTC_INR on CoinDCX).",
+    quote_filter = st.selectbox("Quote currency", ["INR", "USDT", "All quotes"], index=0)
+    try:
+        active_markets = cached_spot_markets(quote_filter)
+    except Exception as exc:
+        active_markets = []
+        st.warning(f"Could not refresh CoinDCX market list: {type(exc).__name__}: {exc}")
+    pair_options = [market.pair for market in active_markets]
+    preferred_pair = next(
+        (i for i, market in enumerate(active_markets)
+         if market.base_asset == "BTC" and market.quote_asset == "INR"),
+        0,
     )
+    if pair_options:
+        selected_pair = st.selectbox("Active CoinDCX spot pair", pair_options, index=preferred_pair)
+        selected_market = next(market for market in active_markets if market.pair == selected_pair)
+        selected_asset, selected_quote = selected_market.base_asset, selected_market.quote_asset
+    else:
+        selected_pair = st.text_input("CoinDCX pair ID (manual fallback)", value="I-BTC_INR")
+        selected_asset, selected_quote = infer_assets_from_pair(selected_pair)
+
+    market_slug = safe_market_slug(selected_asset, selected_quote)
+    # Preserve the original BTC/INR data/model locations for backward compatibility.
+    if selected_asset == "BTC" and selected_quote == "INR":
+        DATA_PATH = Path("data/raw/btc_inr_15m.csv")
+        MODEL_DIR = Path("models")
+    else:
+        DATA_PATH = Path("data/raw") / f"{market_slug}_15m.csv"
+        MODEL_DIR = Path("models") / market_slug
+    currency_prefix = "₹" if selected_quote == "INR" else f"{selected_quote} "
+
     start_date_input = st.date_input(
         "Historical Target Start",
         value=pd.to_datetime("2018-10-18"),
@@ -47,7 +89,7 @@ with st.sidebar:
     if st.button("📥 Download / Refresh Candles", type="primary", use_container_width=True):
         try:
             with st.spinner("Connecting to CoinDCX and ingesting 15m candles..."):
-                pair = discover_btc_inr_pair() if pair_input.strip().lower() == "auto" else pair_input.strip()
+                pair = selected_pair.strip()
                 resume_file = None if force_fresh else str(DATA_PATH)
                 candles = fetch_candles(
                     pair=pair,
@@ -70,14 +112,14 @@ with st.sidebar:
     st.divider()
     st.markdown("### 💾 Local State")
     if DATA_PATH.exists():
-        st.caption(f"📁 Local storage: `{DATA_PATH}` ({DATA_PATH.stat().st_size / (1024*1024):.2f} MB)")
+        st.caption(f"Local storage for {selected_pair}: `{DATA_PATH}` ({DATA_PATH.stat().st_size / (1024*1024):.2f} MB)")
     if (MODEL_DIR / "direction_model.joblib").exists():
-        st.caption("🤖 Trained models available in `./models`")
+        st.caption(f"Trained models available for {selected_pair} in `{MODEL_DIR}`")
 
 # ----------------- DATA LOADING -----------------
 if not DATA_PATH.exists():
     st.warning("No candle dataset found locally. Use **Download / Refresh Candles** in the sidebar to ingest history.")
-    st.code("python download_data.py --pair auto --start-date 2018-10-18\npython train_model.py\nstreamlit run app.py", language="bash")
+    st.code("Use the active-market selector to download the selected pair, then train its models in the Forecast tab.", language="text")
     st.stop()
 
 raw = pd.read_csv(DATA_PATH, parse_dates=["time"])
@@ -104,7 +146,7 @@ change_24h_candles = min(96, len(raw)) # 96 * 15m = 24h
 day_change_pct = ((latest_close / raw["close"].iloc[-change_24h_candles]) - 1) * 100
 
 m1, m2, m3, m4, m5 = st.columns(5)
-m1.metric("Latest BTC/INR", f"₹{latest_close:,.2f}", f"{day_change_pct:+.2f}% 24h")
+m1.metric(f"Latest {selected_asset}/{selected_quote}", f"{currency_prefix}{latest_close:,.8g}", f"{day_change_pct:+.2f}% over the last 24h")
 m2.metric("Total Candles", f"{len(raw):,}")
 m3.metric("Coverage in Span", f"{quality.get('observed_span_coverage_pct', 0.0):.1f}%")
 m4.metric("Earliest Candle", str(raw["time"].min())[:16])
@@ -143,7 +185,7 @@ with tab_market:
         height=550,
         margin=dict(l=20, r=20, t=30, b=20),
         xaxis_title="Timestamp (IST)",
-        yaxis_title="Price (₹ INR)",
+        yaxis_title=f"Price ({selected_quote})",
         xaxis_rangeslider_visible=False,
         template="plotly_dark",
     )
@@ -185,9 +227,9 @@ with tab_predict:
         p1, p2, p3, p4 = st.columns(4)
         dir_color = "🟢" if pred["direction"] == "UP" else "🔴"
         p1.metric("Predicted Direction", f"{dir_color} {pred['direction']}", f"{pred['probability_up']:.1%} probability UP")
-        p2.metric("Estimated Next Close", f"₹{pred['predicted_next_close']:,.2f}", f"{pred['predicted_change_pct']:+.3f}%")
-        p3.metric("Expected Price Move", f"₹{pred['predicted_change_inr']:+,.2f}")
-        p4.metric("Last Completed Close", f"₹{pred['last_close']:,.2f}")
+        p2.metric("Estimated Next Close", f"{currency_prefix}{pred['predicted_next_close']:,.8g}", f"{pred['predicted_change_pct']:+.3f}%")
+        p3.metric("Expected Price Move", f"{currency_prefix}{pred['predicted_change_inr']:+,.6g}")
+        p4.metric("Last Completed Close", f"{currency_prefix}{pred['last_close']:,.8g}")
 
         st.caption(
             f"📅 Base candle: **{pred['candle_time']}** | Forecast Horizon: **Next 15 minutes** | "
@@ -211,7 +253,7 @@ with tab_predict:
             height=380,
             margin=dict(l=20, r=20, t=30, b=20),
             xaxis_title="Time",
-            yaxis_title="BTC/INR (₹)",
+            yaxis_title=f"{selected_asset}/{selected_quote} price",
             template="plotly_dark",
         )
         st.plotly_chart(f_fig, use_container_width=True)
@@ -260,8 +302,8 @@ with tab_eval:
             st.markdown("#### Regression Error Comparison")
             reg_df = pd.DataFrame({
                 "Model": ["Machine Learning (HistGB)", "Naive Benchmark (Next = Current)"],
-                "MAE (INR)": [f"₹{metrics.get('test_close_mae_inr', 0):,.2f}", f"₹{metrics.get('naive_close_baseline_mae_inr', 0):,.2f}"],
-                "RMSE (INR)": [f"₹{metrics.get('test_close_rmse_inr', 0):,.2f}", f"₹{metrics.get('naive_close_baseline_rmse_inr', 0):,.2f}"],
+                f"MAE ({selected_quote})": [f"{currency_prefix}{metrics.get('test_close_mae_inr', 0):,.6g}", f"{currency_prefix}{metrics.get('naive_close_baseline_mae_inr', 0):,.6g}"],
+                f"RMSE ({selected_quote})": [f"{currency_prefix}{metrics.get('test_close_rmse_inr', 0):,.6g}", f"{currency_prefix}{metrics.get('naive_close_baseline_rmse_inr', 0):,.6g}"],
                 "MAPE (%)": [f"{metrics.get('test_close_mape_pct', 0):.2f}%", f"{metrics.get('naive_close_baseline_mape_pct', 0):.2f}%"],
             })
             st.table(reg_df)
@@ -336,7 +378,7 @@ with tab_data:
         st.download_button(
             "📥 Export Full Ingested Candles (CSV)",
             raw.to_csv(index=False),
-            file_name="btc_inr_15m.csv",
+            file_name=f"{market_slug}_15m.csv",
             mime="text/csv",
             use_container_width=True,
         )
@@ -351,6 +393,6 @@ with tab_data:
 
 st.divider()
 st.caption(
-    "BTC/INR ML Predictor · Built for local execution on Windows 11 / WSL · "
+    f"{selected_asset}/{selected_quote} Candle Predictor · Built for local execution on Windows 11 / WSL · "
     "Chronological holdout validation · Deterministic feature pipeline"
 )
