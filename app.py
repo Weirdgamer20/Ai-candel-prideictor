@@ -9,7 +9,15 @@ import streamlit as st
 from src.data import data_quality_report, fetch_candles, save_candles
 from src.modeling import fit_and_evaluate, load_models, predict_next
 from src.ocr_utils import extract_chart_data
-from src.universe import SpotMarket, discover_spot_markets
+from src.universe import discover_spot_markets
+
+
+st.set_page_config(
+    page_title="AI Crypto Candle Predictor",
+    page_icon="₿",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 
 @st.cache_data(ttl=300)
@@ -20,12 +28,13 @@ def cached_spot_markets(quote_filter: str):
 def safe_market_slug(asset: str, quote: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", f"{asset}_{quote}".lower()).strip("_")
 
-st.set_page_config(
-    page_title="AI Crypto Candle Predictor",
-    page_icon="₿",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+
+def infer_assets_from_pair(pair: str) -> tuple[str, str]:
+    pair_body = pair.split("-", 1)[-1]
+    parts = pair_body.split("_", 1)
+    if len(parts) == 2 and all(parts):
+        return parts[0].upper(), parts[1].upper()
+    return "UNKNOWN", "UNKNOWN"
 
 st.title("AI Crypto Candle Predictor")
 st.caption("CoinDCX spot-market research · Multi-asset candle forecasts · Risk-gated decision foundation · OCR verification")
@@ -58,7 +67,7 @@ with st.sidebar:
         selected_asset, selected_quote = selected_market.base_asset, selected_market.quote_asset
     else:
         selected_pair = st.text_input("CoinDCX pair ID (manual fallback)", value="I-BTC_INR")
-        selected_asset, selected_quote = "UNKNOWN", quote_filter if quote_filter != "All quotes" else "UNKNOWN"
+        selected_asset, selected_quote = infer_assets_from_pair(selected_pair)
 
     market_slug = safe_market_slug(selected_asset, selected_quote)
     # Preserve the original BTC/INR data/model locations for backward compatibility.
